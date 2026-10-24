@@ -52,6 +52,44 @@ uvicorn app.main:app --reload
 
 Swagger UI: <http://localhost:8000/docs>. Состояние сервиса: `GET /health`.
 
+### Запуск всего проекта в Docker
+
+Docker Compose поднимает основной API, FAQ Workbench и PostgreSQL. Секреты
+остаются в локальном `.env` и не копируются в образы:
+
+```bash
+cp .env.example .env
+```
+
+Заполни `LLM_API_KEY`, `JEV_LLM_API_KEY`, `ADMIN_API_KEY`, `FAQ_ADMIN_API_KEY` и
+`POSTGRES_PASSWORD`. Для последнего используй случайный hex-секрет, например
+`openssl rand -hex 32`. Настрой `ALLOWED_ORIGINS` и `FAQ_ALLOWED_ORIGINS` под свой
+frontend. Если `.env` уже существует, не перезаписывай его: добавь в него новые
+переменные `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `FAQ_ADMIN_API_KEY`,
+`FAQ_ALLOWED_ORIGINS` и `FAQ_API_PORT` из `.env.example`.
+
+Запуск и проверка состояния:
+
+```bash
+docker compose up --build -d
+docker compose ps
+docker compose logs -f api faq-workbench
+```
+
+Основной API будет доступен на <http://localhost:8000>, FAQ Workbench — на
+<http://localhost:8010>. Порты привязаны к loopback-интерфейсу хоста. FAQ Workbench
+выполняет миграции при старте и ждёт готовности PostgreSQL и основного API. Данные
+PostgreSQL и скачанная модель эмбеддингов сохраняются в Docker volumes.
+
+Остановка без удаления данных:
+
+```bash
+docker compose down
+```
+
+Удалить также сохранённую базу и кеш модели можно командой
+`docker compose down --volumes`.
+
 ## Пользовательский чат
 
 Для основного клиентского интерфейса используйте постоянное WebSocket-соединение

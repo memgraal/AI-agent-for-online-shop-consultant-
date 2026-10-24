@@ -1,0 +1,13 @@
+.git
+**/.env*
+**/.venv
+**/venv
+**/__pycache__
+**/.pytest_cache
+**/.ruff_cache
+**/*.py[cod]
+**/*.egg-info
+**/tests
+docs
+*.docx
+.vscode
