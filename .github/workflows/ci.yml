@@ -1,0 +1,37 @@
+name: Python CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            faq_workbench/pyproject.toml
+      - name: Install application and FAQ Workbench dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[test,lint]"
+          python -m pip install -e "faq_workbench[test,lint]"
+      - name: Lint application
+        run: python -m ruff check app tests scripts
+      - name: Test application
+        run: python -m pytest -q tests
+      - name: Lint FAQ Workbench
+        working-directory: faq_workbench
+        run: python -m ruff check faq_workbench tests
+      - name: Test FAQ Workbench
+        working-directory: faq_workbench
+        run: python -m pytest -q tests

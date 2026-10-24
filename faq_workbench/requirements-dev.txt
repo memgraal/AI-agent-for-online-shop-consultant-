@@ -1,0 +1,2 @@
+# Runtime dependencies are declared in pyproject.toml; this installs them with test tools.
+-e .[test,lint]
