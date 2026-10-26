@@ -10,6 +10,7 @@ from typing import Any
 from fastapi import HTTPException
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 
+from app.constants import STREAM_PROGRESS
 from app.schemas.chat import ChatRequest
 from app.config import settings
 from app.services.conversations import conversation_store
@@ -17,16 +18,6 @@ from app.services.logging import log_event
 from app.services.model_capacity import ModelOverloadedError
 from app.services.privacy import redact_personal_data
 from app.services.token_budget import estimate_message_tokens
-
-
-STREAM_PROGRESS = {
-    "search_catalog": "Ищу подходящие товары",
-    "compare_products": "Сравниваю характеристики",
-    "search_knowledge_base": "Проверяю документацию",
-    "calculate_order_total": "Проверяю расчёт корзины",
-    "create_installation_brief": "Собираю ТЗ по объекту",
-    "call_operator": "Готовлю обращение оператору",
-}
 
 
 @dataclass(frozen=True)

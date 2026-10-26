@@ -1,20 +1,12 @@
 """FAQ analysis request and response contracts."""
 
-from typing import Annotated, Literal
+from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.enums import FAQCategory, FAQPriority
 
-FAQCategory = Literal[
-    "подбор и покупка",
-    "характеристики и совместимость",
-    "монтаж и настройка",
-    "эксплуатация и неисправности",
-    "гарантия и обслуживание",
-    "доставка и оплата",
-    "прочее",
-]
-FAQPriority = Literal["высокий", "средний", "низкий", "проверить"]
+
 FAQVariant = Annotated[str, Field(min_length=3, max_length=1_000)]
 # Short grounded answers such as "Да" are valid context and must not make the
 # whole FAQ batch fail validation.

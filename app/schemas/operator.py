@@ -1,9 +1,9 @@
 """Contracts for the process-local operator handoff prototype."""
 
 from datetime import datetime
-from typing import Literal
-
 from pydantic import BaseModel, ConfigDict, Field
+
+from app.enums import OperatorStatus
 
 
 class OperatorRequest(BaseModel):
@@ -17,7 +17,7 @@ class OperatorTicket(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     ticket_id: str
-    status: Literal["queued_local"] = "queued_local"
+    status: OperatorStatus = OperatorStatus.QUEUED_LOCAL
     reason: str
     conversation_id: str | None
     created_at: datetime

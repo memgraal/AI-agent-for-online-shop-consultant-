@@ -9,15 +9,9 @@ import unicodedata
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.constants import TONE_INSTRUCTIONS
 from app.schemas.content_controls import ContentControlsInput, ContentControlsSnapshot
 from app.storage.database import AssistantContentHistory, AssistantContentState
-
-_TONE_INSTRUCTIONS = {
-    "friendly": "Пиши доброжелательно и спокойно, без фамильярности.",
-    "formal": "Пиши нейтрально и деловым тоном, сохраняя ясность.",
-    "concise": "Отвечай особенно кратко, сохраняя важные условия и ограничения.",
-}
-
 
 class ContentControlsStore:
     def __init__(self) -> None:
@@ -119,7 +113,7 @@ class ContentControlsStore:
     def prompt_overlay(self) -> str:
         with self._lock:
             controls = self._controls.model_copy(deep=True)
-        sections = [f"Настройка тона: {_TONE_INSTRUCTIONS[controls.tone]}"]
+        sections = [f"Настройка тона: {TONE_INSTRUCTIONS[controls.tone.value]}"]
         active_faqs = [faq for faq in controls.faqs if faq.enabled]
         if active_faqs:
             sections.append(

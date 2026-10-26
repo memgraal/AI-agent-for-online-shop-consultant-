@@ -3,8 +3,9 @@
 from decimal import Decimal
 import re
 from typing import Literal
-
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from app.enums import Currency, DiscountKind, DiscountStacking, IdentifierKind
 
 
 class StrictModel(BaseModel):
@@ -26,7 +27,7 @@ class CompanyDetailsInput(StrictModel):
 
 
 class IdentifierCheck(StrictModel):
-    identifier: Literal["inn", "ogrn", "kpp"]
+    identifier: IdentifierKind
     value: str
     format_valid: bool
     checksum_valid: bool | None
@@ -48,7 +49,7 @@ class OrderItem(StrictModel):
 
 
 class DiscountRule(StrictModel):
-    kind: Literal["volume", "loyalty"]
+    kind: DiscountKind
     threshold: Decimal = Field(gt=Decimal("0"), max_digits=14, decimal_places=2)
     percent: Decimal = Field(gt=Decimal("0"), le=Decimal("100"), max_digits=5, decimal_places=2)
     label: str = Field(min_length=1, max_length=200)
@@ -58,21 +59,21 @@ class OrderCalculationInput(StrictModel):
     items: list[OrderItem] = Field(min_length=1, max_length=500)
     prior_purchase_total: Decimal = Field(default=Decimal("0"), ge=Decimal("0"), max_digits=14, decimal_places=2)
     discount_rules: list[DiscountRule] = Field(default_factory=list, max_length=50)
-    stacking: Literal["best", "sequential"]
+    stacking: DiscountStacking
 
 
 class AppliedDiscount(StrictModel):
-    kind: Literal["volume", "loyalty"]
+    kind: DiscountKind
     label: str
     percent: Decimal
     amount: Decimal
 
 
 class OrderCalculationResult(StrictModel):
-    currency: Literal["RUB"] = "RUB"
+    currency: Currency = Currency.RUB
     subtotal: Decimal
     applied_discounts: list[AppliedDiscount]
     total_discount: Decimal
     total: Decimal
-    stacking: Literal["best", "sequential"]
+    stacking: DiscountStacking
     note: str = "Расчёт выполнен по переданным ценам и правилам; это не проверка цены или наличия в каталоге."

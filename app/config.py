@@ -1,7 +1,7 @@
-from typing import Literal
-
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app.enums import LLMProvider
 
 
 class Settings(BaseSettings):
@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     # provider credentials remain environment/secret-manager configuration.
     database_url: str = ""
     # Chat model settings (LLM_*): used by customer and admin conversations.
-    llm_provider: Literal["openai", "yandex", "routerai", "openai-compatible"] = "openai"
+    llm_provider: LLMProvider = LLMProvider.OPENAI
     llm_api_key: str = ""
     llm_model: str = "gpt-4o-mini"
     llm_base_url: str | None = None
@@ -44,7 +44,7 @@ class Settings(BaseSettings):
     allowed_origins: str = ""
     log_level: str = "INFO"
     log_file: str = "logs/sss-ai.log"
-    log_format: Literal["json", "text"] = "json"
+    log_format: str = "json"
     log_max_bytes: int = 10_485_760
     log_backup_count: int = 5
 

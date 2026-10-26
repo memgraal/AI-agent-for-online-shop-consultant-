@@ -1,9 +1,9 @@
 """Validated administrative controls for runtime assistant content."""
 
 from datetime import datetime
-from typing import Literal
-
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from app.enums import Tone
 
 
 class StrictModel(BaseModel):
@@ -30,7 +30,7 @@ class ManagedFAQ(StrictModel):
 
 
 class ContentControlsInput(StrictModel):
-    tone: Literal["friendly", "formal", "concise"] = "friendly"
+    tone: Tone = Tone.FRIENDLY
     disabled_topics: list[DisabledTopic] = Field(default_factory=list, max_length=30)
     faqs: list[ManagedFAQ] = Field(default_factory=list, max_length=200)
     disabled_topic_message: str = Field(
