@@ -11,7 +11,6 @@ def build_customer_agent():
     return build_tool_agent(
         model_node(
             llm,
-            CUSTOMER_SYSTEM_PROMPT,
             tools=CUSTOMER_TOOLS,
             tool_selector=select_customer_tools,
             topic_guard=content_controls.disabled_topic_response,

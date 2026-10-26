@@ -1,2 +1,0 @@
-# Installs the FAQ Workbench package and the runtime dependencies declared in pyproject.toml.
--e .

@@ -9,6 +9,7 @@ services:
       API_HOST: 0.0.0.0
       API_PORT: "8000"
       LOG_FILE: ""
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-sss_faq}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-sss_faq}
       JEV_LLM_API_KEY: ${JEV_LLM_API_KEY:?Set JEV_LLM_API_KEY in .env}
       ADMIN_API_KEY: ${ADMIN_API_KEY:?Set ADMIN_API_KEY in .env}
     ports:
@@ -60,7 +61,7 @@ services:
       FAQ_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-sss_faq}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-sss_faq}
       FAQ_ADMIN_API_KEY: ${FAQ_ADMIN_API_KEY:?Set FAQ_ADMIN_API_KEY in .env}
       FAQ_AI_SERVICE_URL: http://api:8000
-      FAQ_AI_ADMIN_API_KEY: ${ADMIN_API_KEY:?Set ADMIN_API_KEY in .env}
+      FAQ_AI_SERVICE_ADMIN_KEY: ${ADMIN_API_KEY:?Set ADMIN_API_KEY in .env}
     ports:
       - "127.0.0.1:${FAQ_API_PORT:-8010}:8010"
     volumes:

@@ -4,6 +4,13 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -19,19 +26,23 @@ jobs:
           cache: pip
           cache-dependency-path: |
             pyproject.toml
-            faq_workbench/pyproject.toml
-      - name: Install application and FAQ Workbench dependencies
+      - name: Install AI service dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e ".[test,lint]"
-          python -m pip install -e "faq_workbench[test,lint]"
       - name: Lint application
         run: python -m ruff check app tests scripts
       - name: Test application
         run: python -m pytest -q tests
-      - name: Lint FAQ Workbench
-        working-directory: faq_workbench
-        run: python -m ruff check faq_workbench tests
-      - name: Test FAQ Workbench
-        working-directory: faq_workbench
-        run: python -m pytest -q tests
+      - name: Compile Python sources
+        run: |
+          python -m compileall -q app tests scripts
+
+  container:
+    name: Build container images
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build AI service image
+        run: docker build --tag sss-ai-assistant:ci --file Dockerfile .

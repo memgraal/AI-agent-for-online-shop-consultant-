@@ -11,6 +11,54 @@ from app.schemas.faq import FAQAnalysisResponse, FAQCluster, FAQQuestionInput
 from app.services.privacy import redact_personal_data
 
 
+_REFUSAL_MARKERS = (
+    "не могу",
+    "не знаю",
+    "недостаточно информации",
+    "нет информации",
+    "не удалось определить",
+    "не располагаю информацией",
+    "не располагаю данными",
+    "не могу помочь",
+    "как ии",
+    "i don't know",
+    "i cannot",
+    "i can't",
+    "i'm unable",
+    "as an ai",
+    "insufficient information",
+    "cannot determine",
+)
+
+
+def _is_refusal(answer: str) -> bool:
+    normalized = " ".join(answer.casefold().split())
+    return not normalized or any(marker in normalized for marker in _REFUSAL_MARKERS)
+
+
+def _answer_from_context(
+    questions: list[FAQQuestionInput],
+    indexes: list[int],
+) -> str:
+    """Return the first grounded answer when the model refused or omitted one."""
+    for index in indexes:
+        for answer in questions[index - 1].answer_context:
+            cleaned = answer.strip()
+            if cleaned and not _is_refusal(cleaned):
+                return cleaned
+    return ""
+
+
+def _resolve_answer(
+    answer: str,
+    questions: list[FAQQuestionInput],
+    indexes: list[int],
+) -> str:
+    if not _is_refusal(answer):
+        return answer.strip()
+    return _answer_from_context(questions, indexes)
+
+
 @lru_cache(maxsize=1)
 def _analyzer():
     return build_faq_analyzer()
@@ -41,15 +89,25 @@ def _build_response(
             continue
 
         assigned_indexes.update(valid_indexes)
+        answer = _resolve_answer(draft.answer, questions, valid_indexes)
+        priority = _priority(draft.faq_score) if answer else "проверить"
+        rationale = draft.rationale
+        if not answer:
+            rationale = (
+                f"{rationale} Проверенный ответ отсутствует; требуется ручная проверка."
+            )
         clusters.append(
             FAQCluster(
                 source_indexes=valid_indexes,
                 normalized_question=draft.normalized_question,
                 category=draft.category,
-                frequency=sum(questions[index - 1].frequency for index in valid_indexes),
+                frequency=sum(
+                    questions[index - 1].frequency for index in valid_indexes
+                ),
                 faq_score=draft.faq_score,
-                priority=_priority(draft.faq_score),
-                rationale=draft.rationale,
+                priority=priority,
+                rationale=rationale,
+                answer=answer,
             )
         )
 
@@ -57,6 +115,7 @@ def _build_response(
     for index, question in enumerate(questions, start=1):
         if index in assigned_indexes:
             continue
+        answer = _answer_from_context(questions, [index])
         clusters.append(
             FAQCluster(
                 source_indexes=[index],
@@ -66,6 +125,7 @@ def _build_response(
                 faq_score=0,
                 priority="проверить",
                 rationale="Модель не распределила вопрос; проверьте вручную.",
+                answer=answer,
             )
         )
 
@@ -85,7 +145,12 @@ async def analyze_faq_questions(
             "index": index,
             "frequency": question.frequency,
             "question": redact_personal_data(question.text),
-            "variants": [redact_personal_data(variant) for variant in question.variants],
+            "variants": [
+                redact_personal_data(variant) for variant in question.variants
+            ],
+            "answer_context": [
+                redact_personal_data(answer) for answer in question.answer_context
+            ],
         }
         for index, question in enumerate(questions, start=1)
     ]

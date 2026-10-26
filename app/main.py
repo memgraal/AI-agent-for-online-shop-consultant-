@@ -7,6 +7,8 @@ from uuid import uuid4
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.api.admin import router as admin_router
 from app.api.chat import router as chat_router
@@ -16,6 +18,8 @@ from app.api.operator import router as operator_router
 from app.config import settings
 from app.services.logging import close_logging, configure_logging, log_event, request_id_context
 from app.services.rate_limit import rate_limiter
+from app.services.content_controls import content_controls
+from app.storage.database import close_database, create_database, initialize_database
 
 configure_logging()
 
@@ -23,12 +27,23 @@ logger = logging.getLogger("app.http")
 
 
 @asynccontextmanager
-async def lifespan(_: FastAPI):
-    log_event(logger, logging.INFO, "application.started", database="not_configured")
+async def lifespan(app: FastAPI):
+    session_factory = None
+    engine = None
+    database_status = "not_configured"
+    if settings.database_url.strip():
+        session_factory, engine = create_database(settings.database_url)
+        await initialize_database(engine)
+        await content_controls.initialize(session_factory)
+        app.state.session_factory = session_factory
+        app.state.database_engine = engine
+        database_status = "ok"
+    log_event(logger, logging.INFO, "application.started", database=database_status)
     try:
         yield
     finally:
         log_event(logger, logging.INFO, "application.stopping")
+        await close_database(engine)
         close_logging()
 
 
@@ -100,9 +115,27 @@ async def request_logging_middleware(request: Request, call_next):
 
 
 @app.get("/health", tags=["system"])
-def health():
+async def health():
     log_event(logger, logging.DEBUG, "health.checked")
-    return {"status": "ok", "database": "not_configured"}
+    if not settings.database_url.strip():
+        return {"status": "ok", "database": "not_configured"}
+
+    engine = getattr(app.state, "database_engine", None)
+    if engine is None:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "error", "database": "not_initialized"},
+        )
+    try:
+        async with engine.connect() as connection:
+            await connection.execute(text("SELECT 1"))
+    except SQLAlchemyError as exc:
+        log_event(logger, logging.ERROR, "database.health_check_failed", error_type=type(exc).__name__)
+        return JSONResponse(
+            status_code=503,
+            content={"status": "error", "database": "unavailable"},
+        )
+    return {"status": "ok", "database": "ok"}
 
 
 def _provider_configured(provider: str, model: str, api_key: str, base_url: str | None) -> bool:

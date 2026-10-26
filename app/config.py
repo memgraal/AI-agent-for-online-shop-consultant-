@@ -5,6 +5,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    # Runtime assistant content is persisted here when configured. Secrets and
+    # provider credentials remain environment/secret-manager configuration.
+    database_url: str = ""
     # Chat model settings (LLM_*): used by customer and admin conversations.
     llm_provider: Literal["openai", "yandex", "routerai", "openai-compatible"] = "openai"
     llm_api_key: str = ""

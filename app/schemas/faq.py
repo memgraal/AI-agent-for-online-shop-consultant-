@@ -16,6 +16,9 @@ FAQCategory = Literal[
 ]
 FAQPriority = Literal["высокий", "средний", "низкий", "проверить"]
 FAQVariant = Annotated[str, Field(min_length=3, max_length=1_000)]
+# Short grounded answers such as "Да" are valid context and must not make the
+# whole FAQ batch fail validation.
+FAQAnswerContext = Annotated[str, Field(min_length=1, max_length=4_000)]
 
 
 class StrictModel(BaseModel):
@@ -26,6 +29,7 @@ class FAQQuestionInput(StrictModel):
     text: str = Field(min_length=3, max_length=1_000)
     frequency: int = Field(default=1, ge=1, le=100_000)
     variants: list[FAQVariant] = Field(default_factory=list, max_length=5)
+    answer_context: list[FAQAnswerContext] = Field(default_factory=list, max_length=5)
 
 
 class FAQAnalysisRequest(StrictModel):
@@ -40,6 +44,7 @@ class FAQCluster(StrictModel):
     faq_score: int = Field(ge=0, le=100)
     priority: FAQPriority
     rationale: str
+    answer: str = Field(default="", max_length=4_000)
 
 
 class FAQAnalysisResponse(StrictModel):

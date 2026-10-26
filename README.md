@@ -16,6 +16,9 @@ app/
   tools/        раздельные инструменты, доступные соответствующему агенту
 ```
 
+Жизненный цикл FAQ от события чата до проверенного и опубликованного кандидата
+описан в [docs/FAQ_LIFECYCLE.md](./docs/FAQ_LIFECYCLE.md).
+
 ## Запуск
 
 Нужен Python 3.11+.
@@ -37,7 +40,9 @@ python -m ruff check app tests scripts
 cd faq_workbench && python -m ruff check faq_workbench tests
 ```
 
-Эти проверки также запускаются в GitHub Actions для Python 3.11 и 3.12.
+Эти проверки также запускаются в [GitHub Actions](./.github/workflows/ci.yml) для
+Python 3.11 и 3.12. После успешных тестов workflow собирает Docker-образ основного
+API. FAQ Workbench имеет отдельный workflow в своём репозитории.
 
 Заполните `LLM_API_KEY`, настройте провайдера и задайте отдельный секрет
 `ADMIN_API_KEY`, затем запустите:
@@ -45,6 +50,11 @@ cd faq_workbench && python -m ruff check faq_workbench tests
 ```bash
 uvicorn app.main:app --reload
 ```
+
+Настройки контента ассистента (`tone`, отключаемые темы, управляемые FAQ и история
+изменений) сохраняются в PostgreSQL, если задан `DATABASE_URL`. В Docker Compose
+он собирается автоматически из `POSTGRES_*`. Секреты провайдеров, URL сервисов и
+параметры запуска остаются в env или secret manager.
 
 `GET /health` проверяет, что процесс отвечает; `GET /ready` возвращает `503`, пока не
 заданы настройки обеих моделей и административный ключ. Readiness проверяет наличие

@@ -49,6 +49,7 @@ async def test_jev_classifies_categories_and_chat_model_writes_faq_text(monkeypa
             normalized_question="Как получить помощь с заказом?",
             faq_score=81,
             rationale="Обобщённый текст подготовлен основной моделью.",
+            answer="Проверьте статус заказа в личном кабинете.",
         )],
     )
     chat_model = FakeStructuredModel(text_draft)
@@ -86,6 +87,8 @@ async def test_jev_classifies_categories_and_chat_model_writes_faq_text(monkeypa
     ]
     assert all(cluster.normalized_question == "Как получить помощь с заказом?"
                for cluster in result["analysis"].clusters)
+    assert all(cluster.answer == "Проверьте статус заказа в личном кабинете."
+               for cluster in result["analysis"].clusters)
 
 
 @pytest.mark.asyncio
@@ -115,6 +118,7 @@ async def test_faq_classification_aggregates_jev_groups_and_keeps_unassigned_que
         FAQQuestionInput(
             text="Как оплатить картой? Напишите на client@example.ru",
             frequency=4,
+            answer_context=["Оплата картой доступна после подтверждения заказа."],
         ),
         FAQQuestionInput(text="Принимаете банковскую карту?", frequency=3),
         FAQQuestionInput(text="Какая гарантия на товар?", frequency=2),
@@ -125,6 +129,7 @@ async def test_faq_classification_aggregates_jev_groups_and_keeps_unassigned_que
     sent_questions = json.loads(analyzer.request["input_text"])
     assert "client@example.ru" not in analyzer.request["input_text"]
     assert sent_questions[0]["question"].endswith("[СКРЫТО]")
+    assert sent_questions[0]["answer_context"] == ["Оплата картой доступна после подтверждения заказа."]
     assert response.question_count == 3
     assert response.summary == "Основной поток вопросов — оплата."
     assert response.clusters[0].source_indexes == [1, 2]
@@ -134,3 +139,127 @@ async def test_faq_classification_aggregates_jev_groups_and_keeps_unassigned_que
     assert response.clusters[1].source_indexes == [3]
     assert response.clusters[1].category == "прочее"
     assert response.clusters[1].priority == "проверить"
+
+
+@pytest.mark.asyncio
+async def test_faq_analysis_falls_back_to_grounded_context_on_model_refusal(
+    monkeypatch,
+):
+    class FakeAnalyzer:
+        async def ainvoke(self, request, *, config):
+            return {"analysis": FAQAnalysisDraft(
+                summary="Проверка ответа",
+                clusters=[FAQClusterDraft(
+                    source_indexes=[1],
+                    normalized_question="Как подключить устройство?",
+                    category="монтаж и настройка",
+                    faq_score=90,
+                    rationale="Модель не смогла сформулировать ответ.",
+                    answer="Недостаточно информации для ответа.",
+                )],
+            )}
+
+    monkeypatch.setattr(faq_analysis, "_analyzer", lambda: FakeAnalyzer())
+    response = await faq_analysis.analyze_faq_questions([
+        FAQQuestionInput(
+            text="Как подключить устройство?",
+            answer_context=["Откройте настройки и выберите режим подключения."],
+        ),
+    ])
+
+    assert response.clusters[0].answer == "Откройте настройки и выберите режим подключения."
+    assert response.clusters[0].priority == "высокий"
+
+
+@pytest.mark.asyncio
+async def test_faq_analysis_marks_empty_unanswered_cluster_for_review(monkeypatch):
+    class FakeAnalyzer:
+        async def ainvoke(self, request, *, config):
+            return {"analysis": FAQAnalysisDraft(
+                summary="Проверка ответа",
+                clusters=[FAQClusterDraft(
+                    source_indexes=[1],
+                    normalized_question="Что-то неизвестное?",
+                    category="прочее",
+                    faq_score=90,
+                    rationale="Недостаточно данных.",
+                )],
+            )}
+
+    monkeypatch.setattr(faq_analysis, "_analyzer", lambda: FakeAnalyzer())
+    response = await faq_analysis.analyze_faq_questions([
+        FAQQuestionInput(text="Что-то неизвестное?"),
+    ])
+
+    assert response.clusters[0].answer == ""
+    assert response.clusters[0].priority == "проверить"
+    assert "ручная проверка" in response.clusters[0].rationale
+
+
+@pytest.mark.asyncio
+async def test_faq_analysis_does_not_use_refusal_as_grounded_answer(monkeypatch):
+    class FakeAnalyzer:
+        async def ainvoke(self, request, *, config):
+            return {"analysis": FAQAnalysisDraft(
+                summary="Проверка отказа",
+                clusters=[FAQClusterDraft(
+                    source_indexes=[1],
+                    normalized_question="Как настроить устройство?",
+                    category="монтаж и настройка",
+                    faq_score=90,
+                    rationale="Есть вопрос.",
+                    answer="Не могу ответить на этот вопрос.",
+                )],
+            )}
+
+    monkeypatch.setattr(faq_analysis, "_analyzer", lambda: FakeAnalyzer())
+    response = await faq_analysis.analyze_faq_questions([
+        FAQQuestionInput(
+            text="Как настроить устройство?",
+            answer_context=["Не располагаю данными по этой модели."],
+        )
+    ])
+
+    assert response.clusters[0].answer == ""
+    assert response.clusters[0].priority == "проверить"
+
+
+def test_faq_question_accepts_short_grounded_answer_context():
+    question = FAQQuestionInput(text="Работает ли датчик?", answer_context=["Да"])
+
+    assert question.answer_context == ["Да"]
+
+
+@pytest.mark.asyncio
+async def test_analyzer_keeps_question_reviewable_when_text_model_fails(monkeypatch):
+    async def fake_classify_faq_questions(questions):
+        return JEvClassificationDraft(assignments=[
+            FAQCategoryAssignment(source_index=1, category="монтаж и настройка"),
+        ])
+
+    class FailingModel:
+        def with_structured_output(self, schema, *, method):
+            return self
+
+        async def ainvoke(self, messages, *, max_tokens):
+            raise RuntimeError("provider refused structured output")
+
+    monkeypatch.setattr(faq_analyzer, "classify_faq_questions", fake_classify_faq_questions)
+    monkeypatch.setattr(faq_analyzer, "create_chat_model", lambda: FailingModel())
+
+    result = await faq_analyzer.build_faq_analyzer().ainvoke(
+        {
+            "input_text": json.dumps([{
+                "index": 1,
+                "question": "Как подключить устройство?",
+                "answer_context": ["Откройте настройки и выберите режим подключения."],
+            }], ensure_ascii=False),
+            "classification": None,
+            "text_analysis": None,
+            "analysis": None,
+        }
+    )
+
+    cluster = result["analysis"].clusters[0]
+    assert cluster.answer == "Откройте настройки и выберите режим подключения."
+    assert cluster.faq_score == 0

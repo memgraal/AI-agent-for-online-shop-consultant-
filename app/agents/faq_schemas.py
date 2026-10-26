@@ -13,6 +13,7 @@ class FAQClusterDraft(BaseModel):
     category: FAQCategory
     faq_score: int = Field(ge=0, le=100)
     rationale: str = Field(min_length=1, max_length=1000)
+    answer: str = Field(default="", max_length=4000)
 
 
 class FAQAnalysisDraft(BaseModel):
@@ -34,6 +35,7 @@ class FAQTextClusterDraft(BaseModel):
     normalized_question: str = Field(min_length=1, max_length=500)
     faq_score: int = Field(ge=0, le=100)
     rationale: str = Field(min_length=1, max_length=1000)
+    answer: str = Field(default="", max_length=4000)
 
 
 class FAQTextDraft(BaseModel):

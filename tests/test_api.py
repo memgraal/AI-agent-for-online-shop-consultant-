@@ -9,6 +9,7 @@ from app.api import admin as admin_api
 from app.api import chat as customer_api
 from app.config import settings
 from app.main import app
+from app.main import health
 from app.repositories.knowledge import KnowledgeRepository, knowledge_repository
 from app.services.rate_limit import rate_limiter
 from app.schemas.admin_product import (
@@ -23,6 +24,7 @@ from app.schemas.admin_catalog import (
 from app.schemas.content_controls import ContentControlsInput
 from app.services.content_controls import ContentControlsStore
 from app.services.model_capacity import ModelOverloadedError
+from sqlalchemy.exc import SQLAlchemyError
 
 
 class FakeGraph:
@@ -42,6 +44,63 @@ class FakeStreamingGraph(FakeGraph):
             "event": "on_chat_model_stream",
             "data": {"chunk": AIMessageChunk(content="Подбор готов")},
         }
+
+
+class _HealthConnection:
+    def __init__(self, error=None):
+        self.error = error
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return None
+
+    async def execute(self, _query):
+        if self.error is not None:
+            raise self.error
+
+
+class _HealthEngine:
+    def __init__(self, error=None):
+        self.error = error
+
+    def connect(self):
+        return _HealthConnection(self.error)
+
+
+async def test_health_reports_unconfigured_database(monkeypatch):
+    monkeypatch.setattr(settings, "database_url", "")
+
+    assert await health() == {"status": "ok", "database": "not_configured"}
+
+
+async def test_health_reports_database_connection_failure(monkeypatch):
+    monkeypatch.setattr(settings, "database_url", "postgresql+asyncpg://db/test")
+    monkeypatch.setattr(app.state, "database_engine", _HealthEngine(SQLAlchemyError("down")), raising=False)
+
+    response = await health()
+
+    assert response.status_code == 503
+    assert response.body == b'{"status":"error","database":"unavailable"}'
+
+
+async def test_health_reports_database_not_initialized(monkeypatch):
+    monkeypatch.setattr(settings, "database_url", "postgresql+asyncpg://db/test")
+    if hasattr(app.state, "database_engine"):
+        delattr(app.state, "database_engine")
+
+    response = await health()
+
+    assert response.status_code == 503
+    assert response.body == b'{"status":"error","database":"not_initialized"}'
+
+
+async def test_health_reports_database_success(monkeypatch):
+    monkeypatch.setattr(settings, "database_url", "postgresql+asyncpg://db/test")
+    monkeypatch.setattr(app.state, "database_engine", _HealthEngine(), raising=False)
+
+    assert await health() == {"status": "ok", "database": "ok"}
 
 
 @pytest.fixture

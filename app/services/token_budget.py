@@ -1,5 +1,6 @@
 """Approximate token accounting for dialogue context sent to the model."""
 
+from collections.abc import Sequence
 from functools import lru_cache
 from typing import Protocol
 
@@ -20,7 +21,9 @@ def _encoder_for(model: str) -> _TokenEncoder:
         return tiktoken.get_encoding("cl100k_base")
 
 
-def estimate_message_tokens(messages: list[BaseMessage], model: str) -> int:
+def estimate_message_tokens(messages: Sequence[BaseMessage], model: str) -> int:
     """Estimate message tokens, including a small per-message framing allowance."""
     encoder = _encoder_for(model)
-    return 2 + sum(len(encoder.encode(str(message.content))) + 4 for message in messages)
+    return 2 + sum(
+        len(encoder.encode(str(message.content))) + 4 for message in messages
+    )

@@ -1,7 +1,7 @@
 from functools import lru_cache
 import logging
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 
 from app.agents.admin import build_admin_agent
@@ -81,8 +81,13 @@ async def get_content_controls() -> ContentControlsSnapshot:
 @router.put("/content", response_model=ContentControlsSnapshot)
 async def update_content_controls(
     controls: ContentControlsInput,
+    request: Request,
 ) -> ContentControlsSnapshot:
-    snapshot = content_controls.update(controls)
+    session_factory = getattr(request.app.state, "session_factory", None)
+    if session_factory is None:
+        snapshot = content_controls.update(controls)
+    else:
+        snapshot = await content_controls.update_persistent(controls, session_factory)
     log_event(
         logger,
         logging.INFO,

@@ -1,4 +1,4 @@
-"""Versioned process-local content controls; replace storage with a repository later."""
+"""Versioned assistant content controls with a database-backed cache."""
 
 from copy import deepcopy
 from datetime import UTC, datetime
@@ -6,7 +6,11 @@ import re
 from threading import RLock
 import unicodedata
 
+from sqlalchemy import desc, select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
 from app.schemas.content_controls import ContentControlsInput, ContentControlsSnapshot
+from app.storage.database import AssistantContentHistory, AssistantContentState
 
 _TONE_INSTRUCTIONS = {
     "friendly": "Пиши доброжелательно и спокойно, без фамильярности.",
@@ -22,6 +26,77 @@ class ContentControlsStore:
         self._updated_at = datetime.now(UTC)
         self._controls = ContentControlsInput()
         self._history: list[ContentControlsSnapshot] = [self._snapshot()]
+
+    async def initialize(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+        """Load persisted controls once during application startup."""
+        async with session_factory() as session:
+            state = (await session.execute(
+                select(AssistantContentState).where(AssistantContentState.id == 1)
+            )).scalar_one_or_none()
+            if state is None:
+                state = AssistantContentState(
+                    id=1,
+                    revision=1,
+                    controls=ContentControlsInput().model_dump(mode="json"),
+                )
+                session.add(state)
+                session.add(AssistantContentHistory(
+                    revision=1,
+                    controls=state.controls,
+                ))
+                await session.commit()
+                return
+
+            controls = ContentControlsInput.model_validate(state.controls)
+            history_rows = (await session.execute(
+                select(AssistantContentHistory)
+                .order_by(desc(AssistantContentHistory.revision))
+                .limit(50)
+            )).scalars().all()
+        with self._lock:
+            self._revision = state.revision
+            self._updated_at = state.updated_at
+            self._controls = controls
+            self._history = [
+                ContentControlsSnapshot(
+                    revision=row.revision,
+                    updated_at=row.updated_at,
+                    controls=ContentControlsInput.model_validate(row.controls),
+                )
+                for row in reversed(history_rows)
+            ] or [self._snapshot()]
+
+    async def update_persistent(
+        self,
+        controls: ContentControlsInput,
+        session_factory: async_sessionmaker[AsyncSession],
+    ) -> ContentControlsSnapshot:
+        """Persist an update transactionally, then refresh the in-process cache."""
+        async with session_factory() as session:
+            state = (await session.execute(
+                select(AssistantContentState)
+                .where(AssistantContentState.id == 1)
+                .with_for_update()
+            )).scalar_one()
+            state.revision += 1
+            state.controls = controls.model_dump(mode="json")
+            history = AssistantContentHistory(
+                revision=state.revision,
+                controls=state.controls,
+            )
+            session.add(history)
+            await session.commit()
+            updated_at = state.updated_at
+            revision = state.revision
+
+        with self._lock:
+            self._revision = revision
+            self._updated_at = updated_at
+            self._controls = controls.model_copy(deep=True)
+            snapshot = self._snapshot()
+            self._history.append(snapshot)
+            del self._history[:-50]
+            return snapshot
 
     def get(self) -> ContentControlsSnapshot:
         with self._lock:
