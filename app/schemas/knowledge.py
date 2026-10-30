@@ -21,3 +21,20 @@ class KnowledgeDocumentStored(BaseModel):
     document_id: str = Field(min_length=1, max_length=200)
     chunks_added: int = Field(ge=0)
     storage: str = "process_memory"
+
+
+class KnowledgeDocumentSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    document_id: str
+    title: str
+    source_url: str
+    product_sku: str
+    chunks: int = Field(ge=0)
+
+
+class KnowledgeDocumentList(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    documents: list[KnowledgeDocumentSummary]
+    storage: str = "process_memory"

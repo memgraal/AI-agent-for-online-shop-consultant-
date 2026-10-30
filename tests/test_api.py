@@ -7,7 +7,7 @@ from langchain_core.messages import AIMessage, AIMessageChunk
 
 from app.api import admin as admin_api
 from app.api import chat as customer_api
-from app.config import settings
+from app.config import Settings, settings, validate_security_configuration
 from app.main import app
 from app.main import health
 from app.repositories.knowledge import KnowledgeRepository, knowledge_repository
@@ -22,7 +22,9 @@ from app.schemas.admin_catalog import (
     DuplicateScanResponse,
 )
 from app.schemas.content_controls import ContentControlsInput
+from app.schemas.system import HealthResponse
 from app.services.content_controls import ContentControlsStore
+from app.services.agent_settings import AgentSettingsStore
 from app.services.model_capacity import ModelOverloadedError
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -72,7 +74,12 @@ class _HealthEngine:
 async def test_health_reports_unconfigured_database(monkeypatch):
     monkeypatch.setattr(settings, "database_url", "")
 
-    assert await health() == {"status": "ok", "database": "not_configured"}
+    assert await health() == HealthResponse(status="ok", database="not_configured")
+
+
+def test_security_configuration_rejects_short_admin_key():
+    with pytest.raises(RuntimeError, match="32 characters"):
+        validate_security_configuration(Settings(admin_api_key="too-short"))
 
 
 async def test_health_reports_database_connection_failure(monkeypatch):
@@ -100,7 +107,7 @@ async def test_health_reports_database_success(monkeypatch):
     monkeypatch.setattr(settings, "database_url", "postgresql+asyncpg://db/test")
     monkeypatch.setattr(app.state, "database_engine", _HealthEngine(), raising=False)
 
-    assert await health() == {"status": "ok", "database": "ok"}
+    assert await health() == HealthResponse(status="ok", database="ok")
 
 
 @pytest.fixture
@@ -361,6 +368,44 @@ async def test_knowledge_upload_reports_full_process_index_as_retryable(client, 
     assert response.headers["Retry-After"] == "60"
 
 
+async def test_knowledge_document_endpoints_return_typed_payloads(client, monkeypatch):
+    monkeypatch.setattr(settings, "admin_api_key", "test-secret")
+    repository = KnowledgeRepository()
+    monkeypatch.setattr(admin_api, "knowledge_repository", repository)
+    document_id = f"test-document-{uuid4().hex}"
+    headers = {"X-Admin-Key": "test-secret"}
+
+    added = await client.post(
+        "/api/admin/assistant/knowledge/documents",
+        headers=headers,
+        json={
+            "document_id": document_id,
+            "title": "Краткая инструкция",
+            "text": "Подключите датчик к панели.",
+        },
+    )
+    listed = await client.get(
+        "/api/admin/assistant/knowledge/documents",
+        headers=headers,
+    )
+
+    assert added.status_code == 200
+    assert added.json() == {"document_id": document_id, "chunks_added": 1}
+    assert listed.status_code == 200
+    assert listed.json() == {
+        "documents": [
+            {
+                "document_id": document_id,
+                "title": "Краткая инструкция",
+                "source_url": "",
+                "product_sku": "",
+                "chunks": 1,
+            }
+        ],
+        "storage": "process_memory",
+    }
+
+
 async def test_admin_document_upload_indexes_text_and_preserves_metadata(client, monkeypatch):
     monkeypatch.setattr(settings, "admin_api_key", "test-secret")
     document_id = f"test-upload-{uuid4().hex}"
@@ -479,6 +524,42 @@ async def test_admin_content_controls_are_auth_protected_and_versioned(client, m
     assert updated.json()["revision"] == 2
     assert updated.json()["controls"]["tone"] == "formal"
     assert len(history.json()) == 2
+
+
+async def test_admin_agent_settings_update_is_auth_protected_and_validated(client, monkeypatch):
+    monkeypatch.setattr(settings, "admin_api_key", "test-secret")
+    store = AgentSettingsStore()
+    monkeypatch.setattr(admin_api, "agent_settings", store)
+    current = store.get().settings.model_dump(mode="json")
+    current["system_prompts"]["customer"] = "Новая инструкция клиентского агента."
+
+    denied = await client.get("/api/admin/assistant/settings")
+    updated = await client.put(
+        "/api/admin/assistant/settings",
+        headers={"X-Admin-Key": "test-secret"},
+        json=current,
+    )
+
+    assert denied.status_code == 401
+    assert updated.status_code == 200
+    assert updated.json()["revision"] == 2
+    assert updated.json()["settings"]["system_prompts"]["customer"] == (
+        "Новая инструкция клиентского агента."
+    )
+
+
+async def test_admin_agent_settings_rejects_missing_system_prompt(client, monkeypatch):
+    monkeypatch.setattr(settings, "admin_api_key", "test-secret")
+    payload = AgentSettingsStore().get().settings.model_dump(mode="json")
+    del payload["system_prompts"]["faq_analysis"]
+
+    response = await client.put(
+        "/api/admin/assistant/settings",
+        headers={"X-Admin-Key": "test-secret"},
+        json=payload,
+    )
+
+    assert response.status_code == 422
 
 
 async def test_customer_chat_stream_emits_tokens_and_done_event(client, monkeypatch):

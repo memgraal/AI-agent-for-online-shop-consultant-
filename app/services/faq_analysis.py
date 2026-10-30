@@ -6,8 +6,8 @@ from typing import Literal
 
 from app.agents.faq_analyzer import build_faq_analyzer
 from app.agents.faq_schemas import FAQAnalysisDraft
-from app.config import settings
 from app.schemas.faq import FAQAnalysisResponse, FAQCluster, FAQQuestionInput
+from app.services.agent_settings import agent_settings
 from app.services.privacy import redact_personal_data
 
 
@@ -162,7 +162,7 @@ async def analyze_faq_questions(
             "text_analysis": None,
             "analysis": None,
         },
-        config={"recursion_limit": settings.agent_recursion_limit},
+        config={"recursion_limit": agent_settings.get().settings.agent_recursion_limit},
     )
     analysis = result.get("analysis")
     if analysis is None:

@@ -21,6 +21,7 @@ SESSION_TTL_SECONDS = 60 * 60 * 24
 @dataclass
 class Conversation:
     messages: list[dict[str, str]] = field(default_factory=list)
+    summary: str = ""
     touched_at: float = field(default_factory=monotonic)
     turn_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
 
@@ -65,6 +66,31 @@ class ConversationStore:
             {"role": "assistant", "content": answer},
         ])
         session.messages = session.messages[-MAX_MESSAGES:]
+        session.touched_at = monotonic()
+        self._sessions.move_to_end((scope, conversation_id))
+
+    def get_summary(self, scope: str, conversation_id: str) -> str:
+        session = self._sessions.get((scope, conversation_id))
+        if session is None:
+            raise HTTPException(
+                status_code=404, detail="Сессия не найдена или истекла."
+            )
+        return session.summary
+
+    def compact_history(
+        self,
+        scope: str,
+        conversation_id: str,
+        summary: str,
+        recent_messages: list[dict[str, str]],
+    ) -> None:
+        session = self._sessions.get((scope, conversation_id))
+        if session is None:
+            raise HTTPException(
+                status_code=404, detail="Сессия не найдена или истекла."
+            )
+        session.summary = summary
+        session.messages = recent_messages[-MAX_MESSAGES:]
         session.touched_at = monotonic()
         self._sessions.move_to_end((scope, conversation_id))
 

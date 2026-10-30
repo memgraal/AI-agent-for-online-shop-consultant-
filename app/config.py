@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     llm_model: str = "gpt-4o-mini"
     llm_base_url: str | None = None
     llm_timeout_seconds: float = 20.0
+    llm_temperature: float = Field(default=0.0, ge=0.0, le=2.0)
+    llm_max_retries: int = Field(default=1, ge=0, le=5)
     llm_max_concurrent_requests: int = Field(default=64, ge=1, le=10_000)
     llm_queue_timeout_seconds: float = Field(default=5.0, ge=0.1, le=120.0)
     # TypeSafe JEv classifier settings (JEV_LLM_*): independent from chat credentials.
@@ -56,3 +58,9 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def validate_security_configuration(config: Settings = settings) -> None:
+    """Fail fast when an enabled administrative key is trivially guessable."""
+    if config.admin_api_key and len(config.admin_api_key) < 32:
+        raise RuntimeError("ADMIN_API_KEY must contain at least 32 characters.")

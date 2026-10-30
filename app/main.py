@@ -1,24 +1,29 @@
 import logging
 import re
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from time import perf_counter
 from uuid import uuid4
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.middleware.base import RequestResponseEndpoint
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from app.api.admin import router as admin_router
 from app.api.chat import router as chat_router
 from app.api.faq import router as faq_router
 from app.api.orders import router as orders_router
 from app.api.operator import router as operator_router
-from app.config import settings
+from app.config import settings, validate_security_configuration
 from app.services.logging import close_logging, configure_logging, log_event, request_id_context
 from app.services.rate_limit import rate_limiter
 from app.services.content_controls import content_controls
+from app.services.agent_settings import agent_settings
+from app.schemas.system import HealthResponse, ReadinessResponse
 from app.storage.database import close_database, create_database, initialize_database
 
 configure_logging()
@@ -27,14 +32,16 @@ logger = logging.getLogger("app.http")
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
-    session_factory = None
-    engine = None
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    validate_security_configuration()
+    session_factory: async_sessionmaker[AsyncSession] | None = None
+    engine: AsyncEngine | None = None
     database_status = "not_configured"
     if settings.database_url.strip():
         session_factory, engine = create_database(settings.database_url)
         await initialize_database(engine)
         await content_controls.initialize(session_factory)
+        await agent_settings.initialize(session_factory)
         app.state.session_factory = session_factory
         app.state.database_engine = engine
         database_status = "ok"
@@ -52,13 +59,16 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_methods=["GET", "HEAD", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "X-Admin-Key", "X-Request-ID"],
 )
 
 
 @app.middleware("http")
-async def enforce_browser_origin(request: Request, call_next):
+async def enforce_browser_origin(
+    request: Request,
+    call_next: RequestResponseEndpoint,
+) -> Response:
     origin = request.headers.get("origin")
 
     if request.url.path.startswith("/api/chat") and not origin:
@@ -71,7 +81,10 @@ async def enforce_browser_origin(request: Request, call_next):
 
 
 @app.middleware("http")
-async def enforce_rate_limit(request: Request, call_next):
+async def enforce_rate_limit(
+    request: Request,
+    call_next: RequestResponseEndpoint,
+) -> Response:
     if request.url.path in {"/health", "/openapi.json", "/docs", "/redoc"}:
         return await call_next(request)
     client_key = request.client.host if request.client else "unknown"
@@ -92,7 +105,10 @@ app.include_router(operator_router)
 
 
 @app.middleware("http")
-async def request_logging_middleware(request: Request, call_next):
+async def request_logging_middleware(
+    request: Request,
+    call_next: RequestResponseEndpoint,
+) -> Response:
     supplied_id = request.headers.get("X-Request-ID", "")
     request_id = supplied_id if re.fullmatch(r"[A-Za-z0-9._-]{1,64}", supplied_id) else str(uuid4())
     token = request_id_context.set(request_id)
@@ -114,17 +130,25 @@ async def request_logging_middleware(request: Request, call_next):
         request_id_context.reset(token)
 
 
-@app.get("/health", tags=["system"])
-async def health():
+@app.get(
+    "/health",
+    tags=["system"],
+    response_model=HealthResponse,
+    responses={503: {"model": HealthResponse}},
+)
+async def health() -> HealthResponse | JSONResponse:
     log_event(logger, logging.DEBUG, "health.checked")
     if not settings.database_url.strip():
-        return {"status": "ok", "database": "not_configured"}
+        return HealthResponse(status="ok", database="not_configured")
 
-    engine = getattr(app.state, "database_engine", None)
+    engine: AsyncEngine | None = getattr(app.state, "database_engine", None)
     if engine is None:
         return JSONResponse(
             status_code=503,
-            content={"status": "error", "database": "not_initialized"},
+            content=HealthResponse(
+                status="error",
+                database="not_initialized",
+            ).model_dump(),
         )
     try:
         async with engine.connect() as connection:
@@ -133,9 +157,12 @@ async def health():
         log_event(logger, logging.ERROR, "database.health_check_failed", error_type=type(exc).__name__)
         return JSONResponse(
             status_code=503,
-            content={"status": "error", "database": "unavailable"},
+            content=HealthResponse(
+                status="error",
+                database="unavailable",
+            ).model_dump(),
         )
-    return {"status": "ok", "database": "ok"}
+    return HealthResponse(status="ok", database="ok")
 
 
 def _provider_configured(provider: str, model: str, api_key: str, base_url: str | None) -> bool:
@@ -146,15 +173,21 @@ def _provider_configured(provider: str, model: str, api_key: str, base_url: str 
     return bool(api_key.strip())
 
 
-@app.get("/ready", tags=["system"])
-def readiness():
+@app.get(
+    "/ready",
+    tags=["system"],
+    response_model=ReadinessResponse,
+    responses={503: {"model": ReadinessResponse}},
+)
+def readiness(response: Response) -> ReadinessResponse:
     """Report whether required AI provider and administrative settings exist."""
+    runtime = agent_settings.get().settings
     checks = {
         "chat_provider": _provider_configured(
-            settings.llm_provider,
-            settings.llm_model,
+            runtime.llm_provider,
+            runtime.llm_model,
             settings.llm_api_key,
-            settings.llm_base_url,
+            runtime.llm_base_url,
         ),
         "jev_provider": bool(
             settings.jev_llm_api_key.strip()
@@ -164,10 +197,8 @@ def readiness():
         "admin_auth": bool(settings.admin_api_key.strip()),
     }
     ready = all(checks.values())
-    return JSONResponse(
-        status_code=200 if ready else 503,
-        content={
-            "status": "ready" if ready else "not_ready",
-            "checks": checks,
-        },
+    response.status_code = 200 if ready else 503
+    return ReadinessResponse(
+        status="ready" if ready else "not_ready",
+        checks=checks,
     )

@@ -21,11 +21,7 @@ class InMemoryRateLimiter:
             if queue is None:
                 self._prune_stale_clients(now, window)
                 if len(self._requests) >= settings.api_rate_limit_max_clients:
-                    oldest_request = min(
-                        request_time
-                        for requests in self._requests.values()
-                        for request_time in requests
-                    )
+                    oldest_request = min(requests[0] for requests in self._requests.values())
                     retry_after = max(1, int(oldest_request + window - now + 0.999))
                     return False, retry_after
                 queue = deque()
@@ -52,4 +48,3 @@ class InMemoryRateLimiter:
 
 
 rate_limiter = InMemoryRateLimiter()
- 

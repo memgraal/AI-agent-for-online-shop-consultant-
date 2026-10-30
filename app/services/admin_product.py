@@ -9,9 +9,6 @@ from langchain_core.exceptions import OutputParserException
 from pydantic import BaseModel, Field
 
 from app.config import settings
-from app.prompts.admin_product import (
-    PRODUCT_SEO_SYSTEM_PROMPT,
-)
 from app.providers.chat_model import create_chat_model
 from app.schemas.admin_product import (
     ProductClassificationDraft,
@@ -19,6 +16,7 @@ from app.schemas.admin_product import (
     ProductSEODraft,
 )
 from app.services.jev_classification import classify_product as classify_product_with_jev
+from app.services.agent_settings import agent_settings
 from app.services.logging import log_event
 from app.services.model_capacity import model_capacity
 
@@ -43,6 +41,7 @@ async def generate_product_content(
         attributes=attributes.strip(),
     )
     source_payload = source.model_dump()
+    runtime = agent_settings.get().settings
 
     classification = await classify_product(
         source.name,
@@ -55,20 +54,20 @@ async def generate_product_content(
         logger,
         logging.INFO,
         "admin.product_text_generation_started",
-        llm_provider=settings.llm_provider,
-        llm_model=settings.llm_model,
+        llm_provider=runtime.llm_provider,
+        llm_model=runtime.llm_model,
     )
     try:
         # Yandex's AliceAI model used here does not reliably return LangChain
         # function-call arguments for a schema. Its JSON-object response mode is
         # supported and lets Pydantic validate the actual generated object.
-        output_method = "json_mode" if settings.llm_provider == "yandex" else "function_calling"
+        output_method = "json_mode" if runtime.llm_provider == "yandex" else "function_calling"
         structured_seo_model = create_chat_model().with_structured_output(
             ProductSEODraft,
             method=output_method,
         )
         seo_messages = [
-            SystemMessage(content=PRODUCT_SEO_SYSTEM_PROMPT),
+            SystemMessage(content=agent_settings.prompt("product_seo")),
             HumanMessage(content=json.dumps({
                 **source_payload,
                 "classification": classification.model_dump(),
@@ -78,7 +77,7 @@ async def generate_product_content(
             async with model_capacity.slot():
                 seo = await structured_seo_model.ainvoke(
                     seo_messages,
-                    max_tokens=settings.llm_max_output_tokens,
+                    max_tokens=runtime.llm_max_output_tokens,
                 )
         except OutputParserException:
             # AliceAI sometimes returns a syntactically valid but incomplete JSON
@@ -88,11 +87,11 @@ async def generate_product_content(
                 logger,
                 logging.WARNING,
                 "admin.product_text_generation_retry",
-                llm_provider=settings.llm_provider,
-                llm_model=settings.llm_model,
+                llm_provider=runtime.llm_provider,
+                llm_model=runtime.llm_model,
             )
             retry_messages = [
-                SystemMessage(content=PRODUCT_SEO_SYSTEM_PROMPT),
+                SystemMessage(content=agent_settings.prompt("product_seo")),
                 HumanMessage(content=json.dumps({
                     **source_payload,
                     "classification": classification.model_dump(),
@@ -107,14 +106,14 @@ async def generate_product_content(
             async with model_capacity.slot():
                 seo = await structured_seo_model.ainvoke(
                     retry_messages,
-                    max_tokens=settings.llm_max_output_tokens,
+                    max_tokens=runtime.llm_max_output_tokens,
                 )
         log_event(
             logger,
             logging.INFO,
             "admin.product_text_generation_completed",
-            llm_provider=settings.llm_provider,
-            llm_model=settings.llm_model,
+            llm_provider=runtime.llm_provider,
+            llm_model=runtime.llm_model,
             duration_ms=round((perf_counter() - started) * 1000, 2),
         )
     except Exception as exc:
@@ -122,8 +121,8 @@ async def generate_product_content(
             logger,
             logging.ERROR,
             "admin.product_text_generation_failed",
-            llm_provider=settings.llm_provider,
-            llm_model=settings.llm_model,
+            llm_provider=runtime.llm_provider,
+            llm_model=runtime.llm_model,
             duration_ms=round((perf_counter() - started) * 1000, 2),
             error_type=type(exc).__name__,
         )

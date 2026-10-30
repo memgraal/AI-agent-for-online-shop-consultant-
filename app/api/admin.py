@@ -22,11 +22,17 @@ from app.schemas.admin_catalog import (
     DuplicateScanResponse,
 )
 from app.schemas.content_controls import ContentControlsInput, ContentControlsSnapshot
+from app.schemas.agent_settings import AgentSettingsInput, AgentSettingsSnapshot
 from app.schemas.operator import OperatorTicket
-from app.schemas.knowledge import KnowledgeDocumentInput, KnowledgeDocumentStored
+from app.schemas.knowledge import (
+    KnowledgeDocumentInput,
+    KnowledgeDocumentList,
+    KnowledgeDocumentStored,
+)
 from app.services.admin_product import classify_product, generate_product_content
 from app.services.admin_catalog import find_duplicate_candidates, normalize_product_attributes
 from app.services.content_controls import content_controls
+from app.services.agent_settings import agent_settings
 from app.services.document_ingestion import (
     DocumentTooLarge,
     InvalidDocument,
@@ -46,8 +52,14 @@ router = APIRouter(
 logger = logging.getLogger("app.api.admin_chat")
 
 
-@router.post("/knowledge/documents")
-async def add_knowledge_document(document: KnowledgeDocumentInput):
+@router.post(
+    "/knowledge/documents",
+    response_model=KnowledgeDocumentStored,
+    response_model_exclude_unset=True,
+)
+async def add_knowledge_document(
+    document: KnowledgeDocumentInput,
+) -> KnowledgeDocumentStored:
     """Add plain text to the process-local prototype index; no file parser or DB yet."""
     try:
         result = await knowledge_repository.add_document(
@@ -57,13 +69,19 @@ async def add_knowledge_document(document: KnowledgeDocumentInput):
         )
     except KnowledgeCapacityExceeded as exc:
         raise HTTPException(status_code=503, detail=str(exc), headers={"Retry-After": "60"}) from exc
-    return result.data
+    if not isinstance(result.data, dict):
+        raise HTTPException(status_code=502, detail="Хранилище знаний вернуло некорректный результат.")
+    return KnowledgeDocumentStored.model_validate(result.data)
 
 
-@router.get("/knowledge/documents")
-async def list_knowledge_documents():
+@router.get("/knowledge/documents", response_model=KnowledgeDocumentList)
+async def list_knowledge_documents() -> KnowledgeDocumentList:
     result = await knowledge_repository.list_documents()
-    return {"documents": result.data, "storage": "process_memory"}
+    if not isinstance(result.data, list):
+        raise HTTPException(status_code=502, detail="Хранилище знаний вернуло некорректный результат.")
+    return KnowledgeDocumentList.model_validate(
+        {"documents": result.data, "storage": "process_memory"}
+    )
 
 
 @router.get("/operator-requests", response_model=list[OperatorTicket])
@@ -76,6 +94,48 @@ async def list_operator_requests(
 @router.get("/content", response_model=ContentControlsSnapshot)
 async def get_content_controls() -> ContentControlsSnapshot:
     return content_controls.get()
+
+
+@router.get("/settings", response_model=AgentSettingsSnapshot)
+async def get_agent_settings() -> AgentSettingsSnapshot:
+    """Return editable non-secret AI-agent settings and system prompts."""
+    return agent_settings.get()
+
+
+@router.put("/settings", response_model=AgentSettingsSnapshot)
+async def update_agent_settings(
+    new_settings: AgentSettingsInput,
+    request: Request,
+) -> AgentSettingsSnapshot:
+    """Persist AI-agent settings; credentials remain outside this API."""
+    session_factory = getattr(request.app.state, "session_factory", None)
+    if session_factory is None:
+        snapshot = agent_settings.update(new_settings)
+    else:
+        snapshot = await agent_settings.update_persistent(new_settings, session_factory)
+    _clear_agent_caches()
+    log_event(
+        logger,
+        logging.INFO,
+        "admin.agent_settings_updated",
+        revision=snapshot.revision,
+    )
+    return snapshot
+
+
+def _clear_agent_caches() -> None:
+    """Rebuild model graphs after an admin changes model-level settings."""
+    for factory in (_agent, _service):
+        clear_cache = getattr(factory, "cache_clear", None)
+        if clear_cache is not None:
+            clear_cache()
+    from app.api import chat as customer_api
+    from app.services import faq_analysis
+
+    for factory in (customer_api._agent, customer_api._service, faq_analysis._analyzer):
+        clear_cache = getattr(factory, "cache_clear", None)
+        if clear_cache is not None:
+            clear_cache()
 
 
 @router.put("/content", response_model=ContentControlsSnapshot)

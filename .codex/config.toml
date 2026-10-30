@@ -1,0 +1,23 @@
+# Глобальная и проектная конфигурация для OpenAI Codex CLI
+version = "1.0"
+
+[agent]
+name = "KarpathyCodexAgent"
+default_model = "gpt-4o"   # Рекомендуемая модель для точного следования инструкциям Карпати
+temperature = 0.1          # Минимальная температура для жесткого контроля логики и синтаксиса
+
+[context]
+# Фолбэки именования файлов контекста в корне репозитория
+project_doc_fallback_filenames = ["AGENTS.md", "CLAUDE.md"]
+max_context_tokens = 128000
+auto_index_repo = true     # Включает локальный векторный эмбеддинг кодовой базы для поиска контекста
+
+[sandbox]
+# Безопасность и автоматизация выполнения терминальных команд из AGENTS.md
+allow_network_access = false          # Изолирует тесты от внешней сети (защита от утечек и скрытых запросов)
+allowed_commands = ["pytest", "ruff", "alembic", "black", "mypy", "python"]
+auto_run_tests_on_fix = true          # Codex автоматически прогонит pytest, если исправлял баг в коде
+
+[git]
+auto_commit_on_success = false        # Запретить агенту делать автоматические коммиты без вашего согласия
+commit_message_style = "conventional"   # Формат автокоммитов при аппруве (feat:, fix:, refactor:)

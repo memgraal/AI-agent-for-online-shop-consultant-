@@ -2,7 +2,14 @@
 
 from app.enums import FAQCategory
 
+AI_AGENT_SETTINGS_ID = 1
 FAQ_CATEGORIES: tuple[FAQCategory, ...] = tuple(FAQCategory)
+
+# Provider endpoints are stable integration constants, not editable agent
+# settings. API keys and user-specific base URLs remain in environment/DB
+# configuration and are deliberately not stored here.
+YANDEX_AI_STUDIO_BASE_URL = "https://ai.api.cloud.yandex.net/v1"
+ROUTERAI_BASE_URL = "https://routerai.ru/api/v1"
 
 STREAM_PROGRESS: dict[str, str] = {
     "search_catalog": "Ищу подходящие товары",

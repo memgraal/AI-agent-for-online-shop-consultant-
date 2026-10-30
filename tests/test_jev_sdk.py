@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from typesafe_sdk import Choice, Noul
@@ -7,11 +8,11 @@ from app.services import jev_classification
 
 
 class FakeJevClient:
-    def __init__(self, response):
+    def __init__(self, response: Any):
         self.response = response
-        self.state = None
-        self.questions = None
-        self.model = None
+        self.state: str | None = None
+        self.questions: dict[str, Choice | Noul] | None = None
+        self.model: str | None = None
 
     async def __aenter__(self):
         return self
@@ -19,7 +20,13 @@ class FakeJevClient:
     async def __aexit__(self, *_exc_info):
         return None
 
-    async def system_one(self, *, state, questions, model=None):
+    async def system_one(
+        self,
+        *,
+        state: str,
+        questions: dict[str, Choice | Noul],
+        model: str | None = None,
+    ) -> Any:
         self.state = state
         self.questions = questions
         self.model = model
@@ -42,6 +49,8 @@ async def test_jev_faq_classification_uses_choice_and_validates_assignments(monk
         "доставка и оплата", "гарантия и обслуживание",
     ]
     assert [item.source_index for item in result.assignments] == [1, 2]
+    assert client.questions is not None
+    assert client.state is not None
     assert all(isinstance(question, Choice) for question in client.questions.values())
     assert "Где мой заказ?" in client.state
 
@@ -73,5 +82,6 @@ async def test_jev_product_classification_uses_choices_and_nouls_for_tags(monkey
     assert result.product_type == "камера"
     assert result.purpose == "видеонаблюдение"
     assert result.tags == ["Камера X-100", "Разрешение: 4 Мп", "корпус: IP66"]
+    assert client.questions is not None
     assert isinstance(client.questions["category"], Choice)
     assert isinstance(client.questions["tag_1"], Noul)

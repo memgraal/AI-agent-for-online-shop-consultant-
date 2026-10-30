@@ -1,4 +1,5 @@
 import logging
+from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
@@ -99,6 +100,110 @@ async def test_chat_service_drops_old_messages_to_fit_token_budget(monkeypatch):
     assert contents[-1] == "последний вопрос"
     assert len(contents) < len(history) + 1
     assert "old-0" not in " ".join(contents)
+
+
+async def test_chat_service_summarizes_old_history_and_keeps_recent_turns(monkeypatch):
+    store = ConversationStore()
+    monkeypatch.setattr(chat_service_module, "conversation_store", store)
+    monkeypatch.setattr(
+        chat_service_module, "create_chat_model", lambda: FakeSummaryModel()
+    )
+    runtime = SimpleNamespace(
+        chat_max_context_tokens=1200,
+        chat_context_max_messages=20,
+        llm_model="local-model",
+        agent_recursion_limit=12,
+    )
+    monkeypatch.setattr(
+        chat_service_module,
+        "agent_settings",
+        SimpleNamespace(get=lambda: SimpleNamespace(settings=runtime)),
+    )
+
+    class FakeGraph:
+        received = None
+
+        async def ainvoke(self, input_value, config):
+            self.received = input_value
+            return {"messages": [AIMessage(content="Ответ")]}
+
+    graph = FakeGraph()
+    service = ChatService(
+        scope="customer",
+        agent_factory=lambda: graph,
+        logger=logging.getLogger("test"),
+        failure_message="ошибка",
+    )
+    history = [
+        {
+            "role": "user" if index % 2 == 0 else "assistant",
+            "content": f"history-{index} " + "важный факт " * (60 if index < 2 else 5),
+        }
+        for index in range(8)
+    ]
+
+    result = await service.reply(ChatRequest(message="Новый вопрос", history=history))
+
+    summary = store.get_summary("customer", result.conversation_id)
+    assert summary == "Краткое резюме предыдущей истории"
+    sent = graph.received["messages"]
+    assert sent[0].content.startswith(chat_service_module.SUMMARY_MARKER)
+    assert sent[-1].content == "Новый вопрос"
+    _, stored_history = store.start_or_load("customer", result.conversation_id, [])
+    assert "history-7" in " ".join(item["content"] for item in stored_history)
+
+
+class FakeSummaryModel:
+    async def ainvoke(self, _messages, **_kwargs):
+        return AIMessage(content="Краткое резюме предыдущей истории")
+
+
+async def test_chat_service_keeps_history_when_summarization_fails(monkeypatch):
+    store = ConversationStore()
+    conversation_id, history = store.start_or_load(
+        "customer",
+        None,
+        [
+            {
+                "role": "user" if index % 2 == 0 else "assistant",
+                "content": f"history-{index} "
+                + "важный факт " * (60 if index < 2 else 5),
+            }
+            for index in range(8)
+        ],
+    )
+    monkeypatch.setattr(chat_service_module, "conversation_store", store)
+    monkeypatch.setattr(
+        chat_service_module, "create_chat_model", lambda: FailingSummaryModel()
+    )
+    runtime = SimpleNamespace(
+        chat_max_context_tokens=1200,
+        chat_context_max_messages=20,
+        llm_model="local-model",
+        agent_recursion_limit=12,
+    )
+    monkeypatch.setattr(
+        chat_service_module,
+        "agent_settings",
+        SimpleNamespace(get=lambda: SimpleNamespace(settings=runtime)),
+    )
+    service = ChatService(
+        scope="customer",
+        agent_factory=lambda: None,
+        logger=logging.getLogger("test"),
+        failure_message="ошибка",
+    )
+
+    async with store.serialize_turn("customer", conversation_id):
+        await service._summarize_old_history(conversation_id)
+
+    assert store.get_summary("customer", conversation_id) == ""
+    assert store.start_or_load("customer", conversation_id, [])[1] == history
+
+
+class FailingSummaryModel:
+    async def ainvoke(self, _messages, **_kwargs):
+        raise RuntimeError("summary backend unavailable")
 
 
 async def test_chat_service_rejects_current_message_over_token_budget(monkeypatch):

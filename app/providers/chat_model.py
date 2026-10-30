@@ -4,20 +4,23 @@ import logging
 from time import perf_counter
 
 from langchain_openai import ChatOpenAI
+from pydantic import SecretStr
 
 from app.config import Settings, settings
+from app.constants import ROUTERAI_BASE_URL, YANDEX_AI_STUDIO_BASE_URL
+from app.services.agent_settings import agent_settings
 from app.services.logging import log_event
 
-YANDEX_AI_STUDIO_BASE_URL = "https://ai.api.cloud.yandex.net/v1"
-ROUTERAI_BASE_URL = "https://routerai.ru/api/v1"
 logger = logging.getLogger("app.providers.chat_model")
 
 
-def create_chat_model(config: Settings = settings) -> ChatOpenAI:
+def create_chat_model(config: Settings | None = None) -> ChatOpenAI:
     """Build a ChatOpenAI transport for OpenAI, Yandex AI Studio, or compatible APIs."""
+    config = config or settings
+    runtime = agent_settings.get().settings if config is settings else None
     started = perf_counter()
-    provider = config.llm_provider
-    model = config.llm_model.strip()
+    provider = runtime.llm_provider if runtime is not None else config.llm_provider
+    model = (runtime.llm_model if runtime is not None else config.llm_model).strip()
     api_key = config.llm_api_key.strip()
 
     log_event(logger, logging.INFO, "llm.client_creation_started",
@@ -30,7 +33,7 @@ def create_chat_model(config: Settings = settings) -> ChatOpenAI:
         if not model:
             raise RuntimeError("LLM_MODEL не должен быть пустым.")
 
-        base_url = config.llm_base_url
+        base_url = runtime.llm_base_url if runtime is not None else config.llm_base_url
         default_headers = None
 
         if provider == "openai":
@@ -54,11 +57,12 @@ def create_chat_model(config: Settings = settings) -> ChatOpenAI:
 
         client = ChatOpenAI(
             model=model,
-            api_key=api_key or "local-endpoint",
+            api_key=SecretStr(api_key or "local-endpoint"),
             base_url=base_url,
             default_headers=default_headers,
-            temperature=0,
-            timeout=config.llm_timeout_seconds,
+            temperature=runtime.llm_temperature if runtime is not None else config.llm_temperature,
+            max_retries=runtime.llm_max_retries if runtime is not None else config.llm_max_retries,
+            timeout=(runtime.llm_timeout_seconds if runtime is not None else config.llm_timeout_seconds),
             # Qwen 3.6 spends completion tokens on hidden reasoning by default.
             # For a short customer chat this can exhaust the output budget before
             # any user-visible text is produced. Yandex Chat Completions supports

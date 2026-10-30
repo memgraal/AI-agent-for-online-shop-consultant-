@@ -18,11 +18,9 @@ from app.agents.faq_schemas import (
     JEvClassificationDraft,
 )
 from app.config import settings
-from app.prompts.faq_analysis import (
-    FAQ_ANALYSIS_SYSTEM_PROMPT,
-)
 from app.providers.chat_model import create_chat_model
 from app.schemas.faq import FAQCategory
+from app.services.agent_settings import agent_settings
 from app.services.logging import log_event
 from app.services.jev_classification import classify_faq_questions
 from app.services.model_capacity import ModelOverloadedError, model_capacity
@@ -153,28 +151,29 @@ def build_faq_analyzer():
         for row in rows:
             row["category"] = categories.get(_row_index(row), "прочее")
 
+        runtime = agent_settings.get().settings
         log_event(
             logger,
             logging.INFO,
             "faq.text_generation_started",
-            llm_provider=settings.llm_provider,
-            llm_model=settings.llm_model,
+            llm_provider=runtime.llm_provider,
+            llm_model=runtime.llm_model,
         )
         try:
             async with model_capacity.slot():
                 text_analysis = await text_model.ainvoke(
                     [
-                        SystemMessage(content=FAQ_ANALYSIS_SYSTEM_PROMPT),
+                        SystemMessage(content=agent_settings.prompt("faq_analysis")),
                         HumanMessage(content=json.dumps(rows, ensure_ascii=False)),
                     ],
-                    max_tokens=settings.llm_max_output_tokens,
+                    max_tokens=runtime.llm_max_output_tokens,
                 )
             log_event(
                 logger,
                 logging.INFO,
                 "faq.text_generation_completed",
-                llm_provider=settings.llm_provider,
-                llm_model=settings.llm_model,
+                llm_provider=runtime.llm_provider,
+                llm_model=runtime.llm_model,
                 duration_ms=round((perf_counter() - started) * 1000, 2),
             )
             if not isinstance(text_analysis, FAQTextDraft):
@@ -187,8 +186,8 @@ def build_faq_analyzer():
                 logger,
                 logging.WARNING,
                 "faq.text_generation_fallback",
-                llm_provider=settings.llm_provider,
-                llm_model=settings.llm_model,
+                llm_provider=runtime.llm_provider,
+                llm_model=runtime.llm_model,
                 duration_ms=round((perf_counter() - started) * 1000, 2),
                 error_type=type(exc).__name__,
             )

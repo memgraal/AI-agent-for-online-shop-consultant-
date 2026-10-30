@@ -8,7 +8,8 @@ import unicodedata
 from langchain_core.exceptions import OutputParserException
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from app.config import settings
+from app.config import settings as _environment_settings
+from app.prompts.admin_catalog import ATTRIBUTE_NORMALIZATION_SYSTEM_PROMPT
 from app.providers.chat_model import create_chat_model
 from app.schemas.admin_catalog import (
     AttributeNormalizationRequest,
@@ -18,14 +19,12 @@ from app.schemas.admin_catalog import (
     DuplicateScanResponse,
     NormalizedAttribute,
 )
+from app.services.agent_settings import agent_settings
 from app.services.model_capacity import model_capacity
 
-_NORMALIZATION_PROMPT = """Ты — помощник администратора по нормализации товарных атрибутов.
-Предложи канонические название и значение каждого атрибута. Сохраняй смысл и исходные
-числа, единицы и обозначения; не добавляй отсутствующие характеристики. Верни ровно
-по одному результату в исходном порядке. Уверенность укажи от 0 до 1. Все значения —
-предложения для проверки администратором, исходные данные не изменяй.
-"""
+# Kept as a module-level alias for existing integrations that patch settings in
+# tests; runtime values are read through ``agent_settings`` below.
+settings = _environment_settings
 
 
 async def normalize_product_attributes(
@@ -33,17 +32,21 @@ async def normalize_product_attributes(
 ) -> AttributeNormalizationResponse:
     """Use the main model to suggest typed, reviewable attribute normalization."""
     payload = [item.model_dump() for item in request.attributes]
+    runtime = agent_settings.get().settings
     model = create_chat_model().with_structured_output(
         AttributeNormalizationResponse,
-        method="json_mode" if settings.llm_provider == "yandex" else "function_calling",
+        method="json_mode" if runtime.llm_provider == "yandex" else "function_calling",
     )
     messages = [
-        SystemMessage(content=_NORMALIZATION_PROMPT),
+        SystemMessage(
+            content=agent_settings.prompt("attribute_normalization")
+            or ATTRIBUTE_NORMALIZATION_SYSTEM_PROMPT
+        ),
         HumanMessage(content=json.dumps(payload, ensure_ascii=False)),
     ]
     try:
         async with model_capacity.slot():
-            result = await model.ainvoke(messages, max_tokens=settings.llm_max_output_tokens)
+            result = await model.ainvoke(messages, max_tokens=runtime.llm_max_output_tokens)
     except OutputParserException:
         retry_messages = [
             *messages,
@@ -57,7 +60,7 @@ async def normalize_product_attributes(
         async with model_capacity.slot():
             result = await model.ainvoke(
                 retry_messages,
-                max_tokens=settings.llm_max_output_tokens,
+                max_tokens=runtime.llm_max_output_tokens,
             )
 
     if len(result.attributes) != len(request.attributes):
