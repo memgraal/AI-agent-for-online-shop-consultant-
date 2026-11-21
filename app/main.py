@@ -23,8 +23,10 @@ from app.services.logging import close_logging, configure_logging, log_event, re
 from app.services.rate_limit import rate_limiter
 from app.services.content_controls import content_controls
 from app.services.agent_settings import agent_settings
+from app.repositories.knowledge import knowledge_repository
 from app.schemas.system import HealthResponse, ReadinessResponse
 from app.storage.database import close_database, create_database, initialize_database
+from app.tools.customer import catalog
 
 configure_logging()
 
@@ -36,21 +38,47 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     validate_security_configuration()
     session_factory: async_sessionmaker[AsyncSession] | None = None
     engine: AsyncEngine | None = None
+    store_engine: AsyncEngine | None = None
+    faq_engine: AsyncEngine | None = None
     database_status = "not_configured"
+    
     if settings.database_url.strip():
+    
         session_factory, engine = create_database(settings.database_url)
+    
         await initialize_database(engine)
         await content_controls.initialize(session_factory)
         await agent_settings.initialize(session_factory)
+    
         app.state.session_factory = session_factory
         app.state.database_engine = engine
         database_status = "ok"
+    
+    if settings.store_database_url.strip():
+        store_session_factory, store_engine = create_database(settings.store_database_url)
+        catalog.configure(store_session_factory)
+    
+        app.state.store_database_engine = store_engine
+    
+    if settings.faq_database_url.strip():
+        faq_session_factory, faq_engine = create_database(settings.faq_database_url)
+        knowledge_repository.configure_faq(faq_session_factory)
+        app.state.faq_database_engine = faq_engine
+    
     log_event(logger, logging.INFO, "application.started", database=database_status)
+    
     try:
         yield
+    
     finally:
         log_event(logger, logging.INFO, "application.stopping")
+        catalog.configure(None)
+        knowledge_repository.configure_faq(None)
+        
+        await close_database(store_engine)
+        await close_database(faq_engine)
         await close_database(engine)
+        
         close_logging()
 
 

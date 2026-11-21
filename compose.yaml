@@ -10,6 +10,8 @@ services:
       API_PORT: "8000"
       LOG_FILE: ""
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-sss_faq}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-sss_faq}
+      FAQ_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-sss_faq}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-sss_faq}
+      STORE_DATABASE_URL: ${STORE_DATABASE_URL:-}
       JEV_LLM_API_KEY: ${JEV_LLM_API_KEY:?Set JEV_LLM_API_KEY in .env}
       ADMIN_API_KEY: ${ADMIN_API_KEY:?Set ADMIN_API_KEY in .env}
     ports:

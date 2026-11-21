@@ -8,6 +8,10 @@ class Settings(BaseSettings):
     # Runtime assistant content is persisted here when configured. Secrets and
     # provider credentials remain environment/secret-manager configuration.
     database_url: str = ""
+    # Read-only connections to business data are deliberately separate from
+    # the assistant's writable runtime database.
+    store_database_url: str = ""
+    faq_database_url: str = ""
     # Chat model settings (LLM_*): used by customer and admin conversations.
     llm_provider: LLMProvider = LLMProvider.OPENAI
     llm_api_key: str = ""

@@ -1,10 +1,44 @@
 from dataclasses import dataclass
 from collections.abc import Sequence
 from collections import OrderedDict
+import logging
 import re
+
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.config import settings
 from app.repositories.base import RepositoryResult
+from app.services.logging import log_event
+
+
+logger = logging.getLogger("app.repositories")
+
+_FAQ_SEARCH_SQL = text(
+    """
+    SELECT
+        id,
+        category,
+        normalized_question,
+        answer,
+        score.relevance
+    FROM faq_candidates
+    CROSS JOIN LATERAL (
+        SELECT COUNT(*)::integer AS relevance
+        FROM (
+            SELECT DISTINCT term
+            FROM regexp_split_to_table(lower(CAST(:query AS text)), '[^[:alnum:]_-]+') AS term
+            WHERE length(term) >= 2
+            LIMIT 12
+        ) AS terms
+        WHERE lower(normalized_question || ' ' || answer) ILIKE '%' || terms.term || '%'
+    ) AS score
+    WHERE is_published AND answer <> '' AND score.relevance > 0
+    ORDER BY score.relevance DESC, frequency DESC, id
+    LIMIT 5
+    """
+)
 
 
 @dataclass(frozen=True)
@@ -25,7 +59,7 @@ class KnowledgeCapacityExceeded(RuntimeError):
 
 
 class KnowledgeRepository:
-    """In-memory RAG prototype; content disappears when the process restarts."""
+    """Search uploaded passages and reviewed FAQ facts from PostgreSQL."""
 
     def __init__(
         self,
@@ -33,6 +67,7 @@ class KnowledgeRepository:
         max_documents: int | None = None,
         max_chunks: int | None = None,
         max_indexed_chars: int | None = None,
+        faq_session_factory: async_sessionmaker[AsyncSession] | None = None,
     ) -> None:
         self._max_documents = max_documents if max_documents is not None else settings.knowledge_max_documents
         self._max_chunks = max_chunks if max_chunks is not None else settings.knowledge_max_chunks
@@ -44,6 +79,13 @@ class KnowledgeRepository:
         self._documents: OrderedDict[str, list[KnowledgeChunk]] = OrderedDict()
         self._chunk_count = 0
         self._indexed_chars = 0
+        self._faq_session_factory = faq_session_factory
+
+    def configure_faq(
+        self,
+        session_factory: async_sessionmaker[AsyncSession] | None,
+    ) -> None:
+        self._faq_session_factory = session_factory
 
     async def add_document(
         self, document_id: str, title: str, text: str, *, source_url: str = "",
@@ -151,12 +193,55 @@ class KnowledgeRepository:
                 if score:
                     ranked.append((score, chunk))
         ranked.sort(key=lambda item: item[0], reverse=True)
-        results = [{"title": c.title, "snippet": c.text[:700], "sku": c.product_sku or None,
-                    "section": c.section or None, "page": c.page,
-                    "url": c.source_url or None, "relevance": score}
-                   for score, c in ranked[:5]]
-        return RepositoryResult(configured=True, data={"query": query, "results": results,
-                                                       "mode": "in_memory_keyword_baseline"})
+        results: list[dict[str, object]] = [
+            {
+                "title": c.title,
+                "snippet": c.text[:700],
+                "sku": c.product_sku or None,
+                "section": c.section or None,
+                "page": c.page,
+                "url": c.source_url or None,
+                "relevance": score,
+                "source": "uploaded_document",
+            }
+            for score, c in ranked[:5]
+        ]
+        results.extend(await self._search_published_faq(query))
+        results.sort(key=lambda item: int(item.get("relevance") or 0), reverse=True)
+        mode = "uploaded_documents"
+        if self._faq_session_factory is not None:
+            mode += "+postgresql_published_faq"
+        return RepositoryResult(
+            configured=True,
+            data={"query": query, "results": results[:5], "mode": mode},
+        )
+
+    async def _search_published_faq(self, query: str) -> list[dict[str, object]]:
+        if self._faq_session_factory is None or not query.strip():
+            return []
+        try:
+            async with self._faq_session_factory() as session:
+                result = await session.execute(_FAQ_SEARCH_SQL, {"query": query[:1_000]})
+            return [
+                {
+                    "title": row["normalized_question"],
+                    "snippet": row["answer"],
+                    "section": row["category"],
+                    "relevance": row["relevance"],
+                    "source": "reviewed_published_faq",
+                    "source_id": row["id"],
+                }
+                for row in result.mappings().all()
+            ]
+        except SQLAlchemyError as exc:
+            # FAQ is an optional source and can be migrated independently.
+            log_event(
+                logger,
+                logging.WARNING,
+                "repository.faq_search_unavailable",
+                error_type=type(exc).__name__,
+            )
+            return []
 
 
 # Shared only inside this process. A restart clears all indexed content.
